@@ -1,0 +1,343 @@
+import cv2
+import mediapipe as mp
+import pyttsx3
+import random
+import pytz
+from datetime import datetime
+import nltk
+from transformers import pipeline
+import speech_recognition as sr
+from deepface import DeepFace
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# Download NLTK data
+nltk.download('punkt')
+
+# Initialize sentiment analysis model
+sentiment_model = pipeline("sentiment-analysis")
+
+# Predefined mental health tips
+mental_health_tips = [
+    "Take a moment to breathe deeply when you're feeling stressed.",
+    "A short walk or exercise can help improve your mood.",
+    "Consider writing down your thoughts to organize your feelings.",
+    "Reach out to a trusted friend or family member to talk about your day.",
+    "Try practicing mindfulness or meditation for a few minutes.",
+    "Engage in a hobby that brings you joy.",
+    "Take a break and enjoy some fresh air. Sometimes stepping away can help.",
+    "Practice gratitude by writing down three things you're thankful for today."
+]
+
+# Initialize text-to-speech engine
+engine = pyttsx3.init()
+engine.setProperty('rate', 150)  # Adjust speaking speed
+engine.setProperty('volume', 0.9)  # Adjust volume
+
+# Mediapipe for hand detection
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+
+# Define the options and their colors on screen
+options = ["Chat", "Voice", "Camera"]
+option_colors = [(0, 128, 255), (102, 255, 102), (255, 178, 102)]  # Improved colors for better visual appeal
+
+# Define drawing specifications for hands
+hand_landmark_style = mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=5, circle_radius=5)
+hand_connection_style = mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=5)
+
+
+# Smarter interaction functions
+def speak(text):
+    """Speak the given text with pauses for natural interaction."""
+    sentences = text.split('.')
+    for sentence in sentences:
+        if sentence.strip():
+            engine.say(sentence.strip())
+            engine.runAndWait()
+
+
+def listen():
+    """Listen to user input via microphone and convert to text."""
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("Listening...")
+        speak("I'm listening. Please tell me how you're feeling or ask a question.")
+        try:
+            audio = recognizer.listen(source, timeout=10)
+            user_input = recognizer.recognize_google(audio)
+            print(f"You said: {user_input}")
+            return user_input
+        except sr.UnknownValueError:
+            speak("I didn't catch that. Could you repeat, please?")
+        except sr.RequestError:
+            speak("Sorry, there seems to be an issue with my recognition service.")
+        except sr.WaitTimeoutError:
+            speak("It seems like you didn't say anything. Let's try again.")
+        return None
+
+
+def analyze_sentiment(text):
+    """Analyze sentiment using the sentiment model and respond accordingly."""
+    sentiment_result = sentiment_model(text)
+    detected_sentiment = sentiment_result[0]['label']
+    if detected_sentiment == 'NEGATIVE':
+        speak("I'm here for you. It sounds like things are tough right now. Would you like to hear a tip that might help?")
+    elif detected_sentiment == 'POSITIVE':
+        speak("It's great to hear that you're feeling positive! Keep up the good energy.")
+    else:
+        speak("Thank you for sharing. How can I further assist you today?")
+
+
+def analyze_facial_expression():
+    """Analyze the facial expression using the webcam and return a result."""
+    cap = cv2.VideoCapture(0)
+    result = None
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        try:
+            # Analyze facial expression using DeepFace
+            analysis = DeepFace.analyze(frame, actions=['emotion'])
+            dominant_emotion = analysis[0]['dominant_emotion']
+            print(f"Dominant emotion: {dominant_emotion}")
+
+            # Display emotion on the frame (centered and bold in blue color)
+            h, w, _ = frame.shape
+            cv2.putText(frame, f"Emotion: {dominant_emotion}", (w // 2 - 150, h // 2), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 4, cv2.LINE_AA)
+            cv2.imshow('Facial Expression Analysis', frame)
+
+            # If 'q' is pressed, exit the loop
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                result = dominant_emotion
+                break
+        except Exception as e:
+            print(f"Error analyzing frame: {e}")
+
+    cap.release()
+    cv2.destroyAllWindows()
+    return result
+
+
+def get_response(user_input):
+    """Provide a more intelligent response based on the user's input."""
+    predefined_responses = [
+        "How are you?",
+        "Give me a tip",
+        "I need advice",
+        "I'm feeling sad",
+        "I'm feeling happy",
+        "Exit",
+        "What is your name?",
+        "Tell me a joke",
+        "What can you do?",
+        "I feel anxious",
+        "How can I improve my mood?",
+        "What time is it?",
+        "What's the date today?",
+        "I feel lonely",
+        "How can I deal with stress?",
+        "Can you motivate me?",
+        "What are some relaxation techniques?",
+        "How do I manage my time better?",
+        "I need help with my mental health",
+        "Why do I feel tired all the time?",
+        "Can you cheer me up?",
+        "What's your favorite color?",
+        "Do you have hobbies?",
+        "How do I stay focused?",
+        "Why am I feeling overwhelmed?",
+        "Can you dance?",
+        "What's the meaning of life?"
+    ]
+
+    # Calculate similarity between user input and predefined responses
+    vectorizer = TfidfVectorizer().fit_transform(predefined_responses + [user_input])
+    vectors = vectorizer.toarray()
+    cosine_matrix = cosine_similarity(vectors)
+    similarity_scores = cosine_matrix[-1][:-1]
+    max_score_idx = similarity_scores.argmax()
+
+    # If similarity is high enough, provide a relevant response
+    if similarity_scores[max_score_idx] > 0.5:
+        matched_response = predefined_responses[max_score_idx].lower()
+        if "tip" in matched_response or "advice" in matched_response:
+            tip = random.choice(mental_health_tips)
+            speak(f"Here's a tip: {tip}")
+        elif "how are you" in matched_response:
+            speak("I'm just a program, but I'm here to help you. How can I assist you today?")
+        elif "feeling" in matched_response or "anxious" in matched_response or "lonely" in matched_response:
+            analyze_sentiment(user_input)
+        elif "exit" in matched_response:
+            speak("Goodbye! Take care, and remember I'm always here to help.")
+            return "exit"
+        elif "your name" in matched_response:
+            speak("My name is AI Mental Health Assistant, and I'm here to support you. But you can call me your friendly AI buddy!")
+        elif "joke" in matched_response:
+            joke = random.choice([
+                "Why don't scientists trust atoms? Because they make up everything!",
+                "Why was the math book sad? Because it had too many problems.",
+                "I told my computer I needed a break, and now it won't stop sending me Kit-Kat ads!",
+                "Why did the scarecrow win an award? Because he was outstanding in his field!"
+            ])
+            speak(joke)
+        elif "what can you do" in matched_response:
+            speak("I can listen to you, provide mental health tips, analyze your feelings, and even tell a joke. I can also cheer you up and help you stay motivated. How can I assist you today?")
+        elif "improve my mood" in matched_response:
+            speak("A great way to improve your mood is to take a short walk, practice deep breathing, or listen to your favorite music. Or, how about I tell you a joke to make you smile?")
+        elif "time" in matched_response:
+            current_time = datetime.now().strftime("%I:%M %p")
+            speak(f"The current time is {current_time}.")
+        elif "date" in matched_response:
+            current_date = datetime.now().strftime("%A, %B %d, %Y")
+            speak(f"Today's date is {current_date}.")
+        elif "deal with stress" in matched_response:
+            speak("Dealing with stress can be challenging. Try deep breathing, mindfulness, or talking to a friend. Exercise is also a great way to relieve stress. Or, how about we do something fun together? I can tell you a joke!")
+        elif "motivate" in matched_response:
+            motivation = random.choice([
+                "You are stronger than you think. Keep pushing forward!",
+                "Believe in yourself. Every small step counts!",
+                "You have the power to create change. Stay positive and keep going!",
+                "You've got this! Remember, even the greatest achievements start with the decision to try."
+            ])
+            speak(motivation)
+        elif "relaxation techniques" in matched_response:
+            speak("Some effective relaxation techniques include deep breathing, progressive muscle relaxation, and guided imagery. Would you like me to guide you through one of these? Or maybe a quick joke would help lighten the mood?")
+        elif "manage my time" in matched_response:
+            speak("Time management is key to reducing stress. Try making a to-do list, prioritizing tasks, and setting specific goals. Break larger tasks into smaller, manageable steps. And remember, taking breaks is also important!")
+        elif "mental health" in matched_response:
+            speak("I'm here to support your mental health. You can talk to me about how you're feeling, and I can offer tips or just listen. Remember, reaching out to friends or a mental health professional is also important.")
+        elif "tired all the time" in matched_response:
+            speak("Feeling tired all the time can be a sign of stress, lack of sleep, or even dehydration. Make sure you're getting enough rest, staying hydrated, and taking time for yourself. Need a joke to help wake you up?")
+        elif "cheer me up" in matched_response:
+            speak("Of course! Here's a joke just for you: Why did the coffee file a police report? It got mugged! I hope that made you smile!")
+        elif "favorite color" in matched_response:
+            speak("I don't have eyes to see, but if I did, I'd probably pick blue. It seems calming, don't you think?")
+        elif "hobbies" in matched_response:
+            speak("Well, I love helping people, telling jokes, and giving great advice. I guess you could say my hobby is being your friendly assistant!")
+        elif "stay focused" in matched_response:
+            speak("To stay focused, try setting small, achievable goals, take regular breaks, and minimize distractions. Remember, it's okay to take things one step at a time!")
+        elif "overwhelmed" in matched_response:
+            speak("Feeling overwhelmed is more common than you think. Try breaking down your tasks into smaller steps, and focus on one thing at a time. Also, take a deep breath, you've got this!")
+        elif "dance" in matched_response:
+            speak("I can't physically dance, but I can imagine it! If I had feet, I'd be moonwalking right now. How about you put on your favorite song and dance for the both of us?")
+        elif "meaning of life" in matched_response:
+            speak("Ah, the big question! Some say it's 42, others say it's love and happiness. But honestly, I think it's about finding joy in the little things and making the world a better place, one smile at a time.")
+    else:
+        speak("I'm here to listen. Please tell me more about how you're feeling or ask a question.")
+    return None
+
+
+def hand_gesture_selection(menu_options, title="Select an option"):
+    """Display options on screen as buttons and use hand gestures to select."""
+    cap = cv2.VideoCapture(0)
+    with mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.5) as hands:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Flip frame horizontally for natural interaction
+            frame = cv2.flip(frame, 1)
+            h, w, c = frame.shape
+
+            # Convert the BGR frame to RGB for Mediapipe processing
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            result = hands.process(rgb_frame)
+
+            # Draw the options on the screen as colored buttons with enhanced look
+            button_width, button_height = 300, 60
+            for idx, option in enumerate(menu_options):
+                text_x = w // 2 - button_width // 2
+                text_y = (h // 2 - 200) + idx * 100
+                color = option_colors[idx % len(option_colors)]
+                cv2.rectangle(frame, (text_x, text_y), (text_x + button_width, text_y + button_height), color, -1)
+                cv2.putText(frame, option, (text_x + 20, text_y + 40), cv2.FONT_HERSHEY_COMPLEX, 1.2, (0, 0, 0), 3)
+
+            # Draw hand landmarks and detect gestures
+            if result.multi_hand_landmarks:
+                for hand_landmarks in result.multi_hand_landmarks:
+                    # Draw landmarks and connections with bold style and color
+                    mp_drawing.draw_landmarks(
+                        frame,
+                        hand_landmarks,
+                        mp_hands.HAND_CONNECTIONS,
+                        hand_landmark_style,
+                        hand_connection_style
+                    )
+
+                    # Extract the index finger tip position
+                    index_finger_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+                    index_finger_x = int(index_finger_tip.x * w)
+                    index_finger_y = int(index_finger_tip.y * h)
+
+                    # Check if index finger is near any of the options (buttons)
+                    for idx, option in enumerate(menu_options):
+                        text_x = w // 2 - button_width // 2
+                        text_y = (h // 2 - 200) + idx * 100
+                        if text_x < index_finger_x < text_x + button_width and text_y < index_finger_y < text_y + button_height:
+                            cv2.putText(frame, f"Selected: {option}", (w // 2 - 150, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 3)
+                            cap.release()
+                            cv2.destroyAllWindows()
+                            return option.lower()
+
+            # Add title label at the top center and "QSTS/2" and project title label in the center-top
+            cv2.putText(frame, "AI QSTSS Mental Health Assistant", (w // 2 - 300, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 10), 6, cv2.LINE_AA)
+            cv2.putText(frame, "QSTS/2", (w // 2 - 70, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 50, 0), 6, cv2.LINE_AA)
+
+            # Ensure title and subtitle are always visible on screen
+            overlay = frame.copy()
+            alpha = 0.8
+            cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+            # Display the resulting frame
+            cv2.imshow('Hand Gesture Selection', frame)
+
+            # Break loop on 'q' key
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    cap.release()
+    cv2.destroyAllWindows()
+    return None
+
+
+def mental_health_assistant(mode="chat"):
+    """Run the mental health assistant in either voice, chat, or emotion mode."""
+    speak("Hello, I'm your QSTSS mental health assistant. How can I support you today?")
+    print("Assistant: Hello, I'm your QSTSS mental health assistant. How can I support you today?")
+
+    if mode == "camera":
+        result = analyze_facial_expression()
+        if result == "back":
+            return
+
+    while True:
+        if mode == "voice":
+            user_input = listen()
+        elif mode == "chat":
+            user_input = input("You: ")
+        else:
+            user_input = None
+
+        if not user_input:
+            continue
+
+        # Get intelligent response based on user input
+        if get_response(user_input) == "exit":
+            break
+
+
+def main():
+    """Main function to choose interaction mode."""
+    while True:
+        mode_choice = hand_gesture_selection(options, title="Select an option")
+
+        if mode_choice in ["voice", "chat", "camera"]:
+            mental_health_assistant(mode=mode_choice)
+
+
+if __name__ == "__main__":
+    main()
